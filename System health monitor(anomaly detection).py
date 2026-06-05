@@ -20,7 +20,7 @@ THRESHOLDS = {
     'disk': 90,     
     'net_sent': 10*1024*1024,   
     'net_recv': 10*1024*1024,   
-
+}
 #Function defined to choose a sensor 
 def select_sensor():
     if psutil_sensors_temp is None:
