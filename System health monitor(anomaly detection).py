@@ -137,7 +137,6 @@ def main():
                 top_processes = collect_processes()
 
                 alerts, last_net = alert_engine(stats, last_net)
-
                 
                 for alert in alerts:
                     print(alert)
@@ -157,7 +156,9 @@ def main():
                 csvfile.flush()
                 time.sleep(4)  
         except KeyboardInterrupt:
-            print("\nData collection stopped by user (Ctrl+C).")
+            print("Data collection stopped.")
+            print("Exitting...")
+            print("Thank you for using the system health monitor. Goodbye! 😀")
 
 #This ensures the function is executed only when the script is run directly, not when imported as a module
 if __name__ == "__main__":
