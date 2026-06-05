@@ -4,7 +4,7 @@ import time
 import threading
 import sys
 
-# Try to import sensors_temperatures (Linux only) and handle gracefully otherwise
+#For monitoring the temperature 
 try:
     import psutil
     psutil_sensors_temp = psutil.sensors_temperatures
@@ -13,15 +13,15 @@ except (ImportError, AttributeError):
 
 from datetime import datetime
 
-# Alert thresholds, can configure as needed
+#It sets the Adjustable thresholds for CPU, RAM, Disk usage and network spikes
 THRESHOLDS = {
-    'cpu': 80,       # % CPU usage
-    'ram': 80,       # % RAM usage
-    'disk': 90,      # % Disk usage
-    'net_sent': 100*1024*1024,   # 100MB sent spike in a 5s period
-    'net_recv': 100*1024*1024,   # 100MB recv spike in a 5s period
-}
+    'cpu': 80,       
+    'ram': 80,       
+    'disk': 90,     
+    'net_sent': 10*1024*1024,   
+    'net_recv': 10*1024*1024,   
 
+#Function defined to choose a sensor 
 def select_sensor():
     if psutil_sensors_temp is None:
         print("Temperature sensors are not supported on this system.")
@@ -50,16 +50,18 @@ def select_sensor():
                 pass
             print("Invalid selection. Please try again.")
 
+#Function defined to get the temperature of the system
 def get_temperature(sensor_group):
     if psutil_sensors_temp is None or sensor_group is None:
         return "N/A"
     temps = psutil.sensors_temperatures(fahrenheit=False)
     sensors = temps.get(sensor_group, [])
-    # Try to take first temperature reading available
+   
     if sensors:
         return sensors[0].current
     return "N/A"
 
+#It checks all metrics against the defined thresholds and generates alerts if any metric exceed its threshold
 def alert_engine(stats, last_net):
     alerts = []
     if stats['cpu_usage'] > THRESHOLDS['cpu']:
@@ -77,19 +79,21 @@ def alert_engine(stats, last_net):
         alerts.append(f"ALERT: Network recv spike: {net_recv_spike} bytes")
     return alerts, {'sent': stats['bytes_sent'], 'recv': stats['bytes_recv']}
 
+#This returns a formated list of 5 most resource heavy processes
 def collect_processes(top_n=5):
-    # Get top N processes by CPU usage
+    
     processes = []
     for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
         try:
             processes.append(p.info)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    # Sort by cpu_percent, descending
+   
     top = sorted(processes, key=lambda x: x['cpu_percent'] or 0, reverse=True)[:top_n]
     process_str = "; ".join([f"{proc['name']}({proc['pid']}):CPU%={proc['cpu_percent']} RAM%={proc['memory_percent']}" for proc in top])
     return process_str
 
+#This function initializes the monitoring system by selecting sensors, creating a timestamped CSV log file, defining data columns, and setting up network tracking
 def main():
     sensor_group, _ = select_sensor()
     FILENAME = f"system_health_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -109,6 +113,7 @@ def main():
 
     last_net = {'sent': 0, 'recv': 0}
 
+#This stores the needed metrics in a csv file 
     with open(FILENAME, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(headers)
@@ -133,7 +138,7 @@ def main():
 
                 alerts, last_net = alert_engine(stats, last_net)
 
-                # Display alerts in terminal
+                
                 for alert in alerts:
                     print(alert)
 
@@ -150,9 +155,10 @@ def main():
                 ]
                 writer.writerow(row)
                 csvfile.flush()
-                time.sleep(4)  # already waited 1s in cpu_percent call, total = 5s
+                time.sleep(4)  
         except KeyboardInterrupt:
             print("\nData collection stopped by user (Ctrl+C).")
 
+#This ensures the function is executed only when the script is run directly, not when imported as a module
 if __name__ == "__main__":
     main()
