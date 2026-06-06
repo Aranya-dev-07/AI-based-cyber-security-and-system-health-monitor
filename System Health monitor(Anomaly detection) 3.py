@@ -2,21 +2,23 @@ import psutil
 import csv
 import os
 import time
+import threading
 from datetime import datetime
 
-#sets the filename and thresholds for anomaly detection
 FILENAME = 'system_metrics_data.csv'
+
+#Metrics settings(Adjustable)
 THRESHOLDS = {
-    'cpu': 90,         # CPU usage percent
-    'ram': 90,         # RAM usage percent
-    'disk': 90,        # Disk usage percent
-    'network': 100*1024*1024, # 100MBps 
+    'cpu': 90,          
+    'ram': 90,         
+    'disk': 90,        
+    'network': 100*1024*1024, # 100MBps
 }
 
-#Interval for measuring data 
-interval = 5 
+interval = 5  # You can set this to any integer value as desired
+stop_flag = threading.Event()
 
-#Collects the data and stores them
+# Function to collect system metrics
 def get_metrics():
     cpu = psutil.cpu_percent(interval=1)
     virtual_mem = psutil.virtual_memory()
@@ -37,7 +39,8 @@ def get_metrics():
         'net_sent': net_sent,
         'net_recv': net_recv,
     }
-#THE ALERT ENGINE
+
+#The Alert Engine
 def alert_engine(metrics):
     alerts = []
     if metrics['cpu'] > THRESHOLDS['cpu']:
@@ -51,7 +54,7 @@ def alert_engine(metrics):
     for alert in alerts:
         print("ALERT:", alert)
 
-#To keep track of the number of runs 
+#This keeps track of every run
 def get_next_run_number():
     if not os.path.exists(FILENAME):
         return 1
@@ -67,7 +70,6 @@ def get_next_run_number():
                     continue
     return run_num
 
-#Defines the csv file to read data
 def write_header_if_needed():
     if not os.path.exists(FILENAME):
         with open(FILENAME, 'w', newline='') as f:
@@ -75,7 +77,6 @@ def write_header_if_needed():
             writer.writerow(["this is run 1"])
             writer.writerow(['timestamp','cpu_percent','ram_percent','disk_percent','running_procs','net_sent','net_recv'])
 
-#These are defined to continuously append data 
 def append_run_tag(run_n):
     if os.path.exists(FILENAME):
         with open(FILENAME, 'a', newline='') as f:
@@ -83,6 +84,7 @@ def append_run_tag(run_n):
             writer.writerow([f"this is run {run_n}"])
             writer.writerow(['timestamp','cpu_percent','ram_percent','disk_percent','running_procs','net_sent','net_recv'])
 
+#Appends a single row to the CSV file with the latest metrics
 def append_metrics(metrics):
     with open(FILENAME, 'a', newline='') as f:
         writer = csv.writer(f)
@@ -96,17 +98,29 @@ def append_metrics(metrics):
             metrics['net_recv']
         ])
 
-#Allows the user to start and stop data collection.
+def data_collector(interval, run_num):
+    try:
+        while not stop_flag.is_set():
+            metrics = get_metrics()
+            append_metrics(metrics)
+            alert_engine(metrics)
+            for _ in range(interval):
+                if stop_flag.is_set():
+                    break
+                time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+
 def main():
     global interval
     write_header_if_needed()
     run_num = get_next_run_number()
     if run_num > 1:
         append_run_tag(run_num)
+
     print('Type "start" to begin data collection, or "stop" to exit.')
     print(f"Current interval for metrics collection is set to {interval} seconds.")
     print('If you want to change the interval, type the number of seconds and press Enter, or just press Enter to keep current value.')
-    
     inp = input(f"Set new interval in seconds (current: {interval}): ").strip()
     if inp:
         try:
@@ -127,35 +141,29 @@ def main():
             break
         elif cmd == "stop":
             print("The user has stopped collecting the data")
-            print("Exitting...")
-            print("Thank you for using the system health monitor. Goodbye! 😀")
+            print("Exiting...")
+            print("Thank you for using the system health monitor..😀")
             return
 
-    collecting = True
+    collector_thread = threading.Thread(target=data_collector, args=(interval, run_num), daemon=True)
+    collector_thread.start()
 
+    # Wait for user to type 'stop'
     try:
-        while collecting:
-            metrics = get_metrics()
-            append_metrics(metrics)
-            alert_engine(metrics)
-            
-            start_time = time.time()
-            elapsed = 0
-            while elapsed < interval:
-                remaining = interval - elapsed
-                prompt = f"(Type 'stop' and Enter to end data collection, or just Enter to continue. Next check in {remaining}s): "
-                user_input = input(prompt).strip().lower()
-                if user_input == "stop":
-                    print("The user has stopped collecting the data")
-                    collecting = False
-                    break
-                time.sleep(1)
-                elapsed = int(time.time() - start_time)
+        while collector_thread.is_alive():
+            user_cmd = input('Type "stop" to end data collection: ').strip().lower()
+            if user_cmd == "stop":
+                stop_flag.set()
+                print("The user has stopped collecting the data")
+                break
+            # else ignore, keep running
+        collector_thread.join()
     except KeyboardInterrupt:
+        stop_flag.set()
         print("The user has stopped collecting the data")
-        print("Exiting gracefully...")
-        print("Thank you for using the system health monitor. Goodbye! 😀")
+        print("Exiting...")
+        print("Thank you for using the system health monitor..😀")
 
-#Executes the main function when the script is run directly not when loaded
+#Ensures that the main function runs when this script is executed
 if __name__ == '__main__':
     main()
