@@ -1,194 +1,161 @@
 import psutil
-import time
 import csv
 import os
+import time
 from datetime import datetime
 
-#Allows the user to choose any available sensor if available 
-def select_temperature_sensor():
-    temps = psutil.sensors_temperatures()
-    if not temps or all(len(v) == 0 for v in temps.values()):
-        print("No temperature sensors found on this device. 😥")
-        return None, None
-    sensor_keys = list(temps.keys())
-    if len(sensor_keys) == 1:
-        selected_sensor_key = sensor_keys[0]
-    else:
-        print("Available temperature sensors:")
-        for idx, sensor_name in enumerate(sensor_keys):
-            print(f"{idx + 1}: {sensor_name} ({len(temps[sensor_name])} sub-sensors)")
-        while True:
-            try:
-                choice = int(input(f"Select a sensor by number (1-{len(sensor_keys)}): "))
-                if 1 <= choice <= len(sensor_keys):
-                    selected_sensor_key = sensor_keys[choice - 1]
-                    break
-            except Exception:
-                pass
-            print("Invalid selection. Please try again.")
-    sensors = temps[selected_sensor_key]
-    if len(sensors) > 1:
-        print(f"Available sub-sensors in '{selected_sensor_key}':")
-        for idx, entry in enumerate(sensors):
-            print(f"{idx + 1}: {entry.label or '(unnamed)'}")
-        while True:
-            try:
-                sub_choice = int(input(f"Select a sub-sensor by number (1-{len(sensors)}): "))
-                if 1 <= sub_choice <= len(sensors):
-                    selected_sensor = sensors[sub_choice - 1]
-                    break
-            except Exception:
-                pass
-            print("Invalid selection. Please try again.")
-    else:
-        selected_sensor = sensors[0]
-    return selected_sensor_key, selected_sensor.label
+#sets the filename and thresholds for anomaly detection
+FILENAME = 'system_metrics_data.csv'
+THRESHOLDS = {
+    'cpu': 90,         # CPU usage percent
+    'ram': 90,         # RAM usage percent
+    'disk': 90,        # Disk usage percent
+    'network': 100*1024*1024, # 100MBps 
+}
 
-#Fetches some temperature data based on the user selection
-def get_temperature(selected_key, selected_label):
-    temps = psutil.sensors_temperatures()
-    if not temps or selected_key not in temps: return None
-    for entry in temps[selected_key]:
-        if entry.label == selected_label or (not selected_label and not entry.label):
-            return entry.current
-    return None
+#Interval for measuring data 
+interval = 5 
 
-#reading the existing csv collection file 
-def get_run_number(csv_filename):
+#Collects the data and stores them
+def get_metrics():
+    cpu = psutil.cpu_percent(interval=1)
+    virtual_mem = psutil.virtual_memory()
+    ram = virtual_mem.percent
+    disk = psutil.disk_usage('/').percent
+    net1 = psutil.net_io_counters()
+    time.sleep(1)
+    net2 = psutil.net_io_counters()
+    net_sent = net2.bytes_sent - net1.bytes_sent
+    net_recv = net2.bytes_recv - net1.bytes_recv
+    procs = len(psutil.pids())
+    return {
+        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'cpu': cpu,
+        'ram': ram,
+        'disk': disk,
+        'procs': procs,
+        'net_sent': net_sent,
+        'net_recv': net_recv,
+    }
+#THE ALERT ENGINE
+def alert_engine(metrics):
+    alerts = []
+    if metrics['cpu'] > THRESHOLDS['cpu']:
+        alerts.append(f"CPU usage high: {metrics['cpu']}%")
+    if metrics['ram'] > THRESHOLDS['ram']:
+        alerts.append(f"RAM usage high: {metrics['ram']}%")
+    if metrics['disk'] > THRESHOLDS['disk']:
+        alerts.append(f"Disk usage high: {metrics['disk']}%")
+    if metrics['net_sent'] > THRESHOLDS['network'] or metrics['net_recv'] > THRESHOLDS['network']:
+        alerts.append(f"Network spike detected (send: {metrics['net_sent']} bytes/sec, recv: {metrics['net_recv']} bytes/sec)")
+    for alert in alerts:
+        print("ALERT:", alert)
+
+#To keep track of the number of runs 
+def get_next_run_number():
+    if not os.path.exists(FILENAME):
+        return 1
     run_num = 1
-    if not os.path.exists(csv_filename):
-        return run_num
-    with open(csv_filename, 'r') as f:
-        for line in f:
-            if line.startswith("this is run"):
+    with open(FILENAME, 'r', newline='') as f:
+        for row in csv.reader(f):
+            if row and row[0].startswith('this is run '):
                 try:
-                    n = int(line.strip().split()[-1])
+                    n = int(row[0].split(' ')[-1])
                     if n >= run_num:
                         run_num = n + 1
-                except Exception:
-                    pass
+                except:
+                    continue
     return run_num
 
-#The start Button
+#Defines the csv file to read data
+def write_header_if_needed():
+    if not os.path.exists(FILENAME):
+        with open(FILENAME, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["this is run 1"])
+            writer.writerow(['timestamp','cpu_percent','ram_percent','disk_percent','running_procs','net_sent','net_recv'])
+
+#These are defined to continuously append data 
+def append_run_tag(run_n):
+    if os.path.exists(FILENAME):
+        with open(FILENAME, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([f"this is run {run_n}"])
+            writer.writerow(['timestamp','cpu_percent','ram_percent','disk_percent','running_procs','net_sent','net_recv'])
+
+def append_metrics(metrics):
+    with open(FILENAME, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            metrics['timestamp'],
+            metrics['cpu'],
+            metrics['ram'],
+            metrics['disk'],
+            metrics['procs'],
+            metrics['net_sent'],
+            metrics['net_recv']
+        ])
+
+#Allows the user to start and stop data collection.
 def main():
-    print('Type "start" to begin collecting system metrics, or "stop" to exit.')
-    command = input(">").strip().lower()
-    if command != "start":
-        print("Exiting")
-        print("You must type 'start' to begin.")
-        return
-
-    # Sensor selection
-    selected_sensor_key, selected_sensor_label = select_temperature_sensor()
-    if selected_sensor_key is None:
-        temp_sensor_available = False
-    else:
-        temp_sensor_available = True
-
-    # Thresholds (customize as needed)
-    CPU_THRESHOLD = 85    
-    RAM_THRESHOLD = 80    
-    DISK_THRESHOLD = 85   
-    NET_THRESHOLD = 100*1024*1024  
-
-    #Reporting data into the existing csv file
-    csv_filename = "system_metrics_data.csv"
-    run_num = get_run_number(csv_filename)
-    headers = ['Timestamp', 'CPU (%)', 'RAM (%)', 'Disk (%)', 
-               'Running Processes', 'Network Sent (MB)', 'Network Recv (MB)', 'Temp (degC)']
-
-    stop_requested = False
-
-#an alert system for resource usage and initializes a CSV log file for periodic system monitoring.
-    def alert_engine(cpu, ram, disk, net_sent, net_recv):
-        alerts = []
-        if cpu > CPU_THRESHOLD:
-            alerts.append(f"ALERT: CPU usage high ({cpu:.1f}%)")
-        if ram > RAM_THRESHOLD:
-            alerts.append(f"ALERT: RAM usage high ({ram:.1f}%)")
-        if disk > DISK_THRESHOLD:
-            alerts.append(f"ALERT: Disk usage high ({disk:.1f}%)")
-        if (net_sent + net_recv) > NET_THRESHOLD:
-            alerts.append(f"ALERT: Network spike (Sent+Recv > {NET_THRESHOLD/(1024*1024)} MB)")
-        for msg in alerts:
-            print(msg)
-
-    if not os.path.exists(csv_filename):
-        with open(csv_filename, 'w', newline='') as f:
-            writer = csv.writer(f)
-            f.write(f"this is run {run_num}\n")
-            writer.writerow(headers)
-    else:
-        with open(csv_filename, 'a', newline='') as f:
-            f.write(f"this is run {run_num}\n")
-            writer = csv.writer(f)
-            writer.writerow(headers)
-
-    print("Collecting system metrics.....") 
-    print("Type 'stop' to stop data collection.")
+    global interval
+    write_header_if_needed()
+    run_num = get_next_run_number()
+    if run_num > 1:
+        append_run_tag(run_num)
+    print('Type "start" to begin data collection, or "stop" to exit.')
+    print(f"Current interval for metrics collection is set to {interval} seconds.")
+    print('If you want to change the interval, type the number of seconds and press Enter, or just press Enter to keep current value.')
     
-    last_net = psutil.net_io_counters()
-    interval = 5 #The interval between each data collection in seconds
-    
-#Checks to stop the function     
-    def input_listener():
-        nonlocal stop_requested
+    inp = input(f"Set new interval in seconds (current: {interval}): ").strip()
+    if inp:
         try:
-            if os.name == 'nt':
-                import msvcrt
-                if msvcrt.kbhit():
-                    line = input()
-                    if line.strip().lower() == "stop":
-                        stop_requested = True
+            val = int(inp)
+            if val > 0:
+                interval = val
+                print(f"Interval changed to {interval} seconds.")
             else:
-                import select
-                import sys
-                i, _, _ = select.select([sys.stdin], [], [], 0)
-                if i:
-                    line = sys.stdin.readline()
-                    if line.strip().lower() == "stop":
-                        stop_requested = True
-        except Exception:
-            pass
+                print("Interval must be a positive integer. Using default.")
+        except ValueError:
+            print("Invalid input. Using default interval.")
 
-#Collects the data and writes it to the CSV file.
-    while not stop_requested:
-    
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cpu_percent = psutil.cpu_percent(interval=None)
-        ram_percent = psutil.virtual_memory().percent
-        disk_percent = psutil.disk_usage('/').percent
-        processes = len(psutil.pids())
-        net_stats = psutil.net_io_counters()
-        net_sent = net_stats.bytes_sent - last_net.bytes_sent
-        net_recv = net_stats.bytes_recv - last_net.bytes_recv
-        last_net = net_stats
+    # Awaiting user to type 'start'
+    while True:
+        cmd = input('> ').strip().lower()
+        if cmd == "start":
+            print(f"Starting system health data collection (This is run {run_num})...")
+            break
+        elif cmd == "stop":
+            print("The user has stopped collecting the data")
+            print("Exitting...")
+            print("Thank you for using the system health monitor. Goodbye! 😀")
+            return
 
-        temp = get_temperature(selected_sensor_key, selected_sensor_label) if temp_sensor_available else "N/A"
+    collecting = True
 
-        row = [
-            timestamp, cpu_percent, ram_percent, disk_percent, processes, 
-            round(net_sent/(1024*1024), 3), round(net_recv/(1024*1024), 3), temp
-        ]
+    try:
+        while collecting:
+            metrics = get_metrics()
+            append_metrics(metrics)
+            alert_engine(metrics)
+            
+            start_time = time.time()
+            elapsed = 0
+            while elapsed < interval:
+                remaining = interval - elapsed
+                prompt = f"(Type 'stop' and Enter to end data collection, or just Enter to continue. Next check in {remaining}s): "
+                user_input = input(prompt).strip().lower()
+                if user_input == "stop":
+                    print("The user has stopped collecting the data")
+                    collecting = False
+                    break
+                time.sleep(1)
+                elapsed = int(time.time() - start_time)
+    except KeyboardInterrupt:
+        print("The user has stopped collecting the data")
+        print("Exiting gracefully...")
+        print("Thank you for using the system health monitor. Goodbye! 😀")
 
-        with open(csv_filename, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(row)
-
-        # Show alerts if needed
-        alert_engine(cpu_percent, ram_percent, disk_percent, net_sent, net_recv)
-
-        print(f"Metrics recorded at {timestamp}. Waiting {interval} seconds...")
-        for i in range(interval * 10):
-            time.sleep(0.1)
-            input_listener()
-            if stop_requested:
-                break
-
-    print("The user has stopped collecting the data.")
-    print("Exiting...")
-    print("Thank you for using the system health monitor! 😊")
-
-#Ensures file is run when executed directly, not imported as a module.
-if __name__ == "__main__":
+#Executes the main function when the script is run directly not when loaded
+if __name__ == '__main__':
     main()
