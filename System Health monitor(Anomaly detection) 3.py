@@ -186,6 +186,8 @@ def main():
                 break
 
     print("The user has stopped collecting the data.")
+    print("Exiting...")
+    print("Thank you for using the system health monitor! 😊")
 
 #Ensures file is run when executed directly, not imported as a module.
 if __name__ == "__main__":
